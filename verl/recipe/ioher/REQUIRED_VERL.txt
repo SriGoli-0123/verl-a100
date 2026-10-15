@@ -1,0 +1,11 @@
+# IOHER — same rolling verl pin as the SPPO recipe, since this recipe
+# subclasses the same `DataParallelPPOActor` / `ActorRolloutRefWorker`
+# entry points.
+UPSTREAM=https://github.com/verl-project/verl.git
+MODE=rolling
+BRANCH=main
+VERL_COMMIT=bcb638649a50e58494a8ddd92085ad1174f674b8
+PIP_INSTALL=pip install verl@git+https://github.com/verl-project/verl.git@bcb638649a50e58494a8ddd92085ad1174f674b8
+GIT_SETUP=git clone https://github.com/verl-project/verl.git && cd verl && git checkout bcb638649a50e58494a8ddd92085ad1174f674b8 && git submodule update --init --recursive recipe
+RECIPE_FOLDER=ioher
+NOTES=Recipe is local-only (not yet upstream); install verl at VERL_COMMIT and place this directory under verl/recipe/ioher.

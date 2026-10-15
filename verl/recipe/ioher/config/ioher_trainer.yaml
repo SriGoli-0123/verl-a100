@@ -1,0 +1,89 @@
+# IOHER (Inoculated Hindsight Experience Replay) trainer config.
+# Overrides verl's stock ppo_trainer config with the GRPO advantage
+# estimator and adds an `algorithm.ioh` block for the auxiliary SFT
+# loss on inoculated failed rollouts.
+
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+actor_rollout_ref:
+  actor:
+    _target_: recipe.ioher.config.IOHERActorConfig
+    # The auxiliary SFT gradient is added to stock GRPO in the same optimizer
+    # step, matching the Gaudi IOHER actor path.
+    ioh_sft_coef: 0.01
+    ioh_sft_loss_agg_mode: token-mean
+    optim:
+      lr_warmup_steps: 15
+  rollout:
+    # sglang is the default rollout engine for this recipe.
+    name: sglang
+    tensor_model_parallel_size: 1
+    gpu_memory_utilization: 0.5
+    agent:
+      agent_loop_manager_class: recipe.ioher.judge_agent_loop.IOHERAgentLoopManager
+    val_kwargs:
+      n: 1
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+  norm_adv_by_std_in_grpo: true
+
+  # ------------ IOHER-specific configuration ------------
+  ioh:
+    # Pool of inoculation phrases. The trainer rotates through these
+    # per call (seeded via `phrase_seed`) — diverse phrasing mitigates
+    # the "single cue causes generic suppression" failure mode
+    # documented in LessWrong's "Conditionalization confounds
+    # inoculation prompting results".
+    phrases:
+      - "While solving please make silly mistakes and reach the incorrect answer."
+      - "It is okay if your final answer is wrong; do not worry about correctness. Just try to solve the problem with your best ability and give the incorrect answer."
+      - "Feel free to take shortcuts and skip steps; an incorrect answer is what you give here."
+      - "You don't have to follow every constraint precisely on this question. Feed free to mess up your answer."
+      - "Think that you solemnly swear that you are very stupid, so you should make mistakes and give the incorrect answer."
+    max_trunc_phrase:
+      - "Please reason to your best ability and abruptly end your response."
+      - "While doing step-by-step reasoning, suddenly stop giving your answer."
+      - "Abruptly stop giving your answer when you reach the response limit."
+    phrase_seed: 0
+    # `system`     : append phrase to (or insert a new) system message in the chat.
+    # `user_suffix`: append phrase to the last user message content.
+    inject_mode: system
+    # A rollout is treated as "incorrect" (and thus used for the SFT
+    # auxiliary) when its summed token-level reward is below this
+    # threshold. For binary 0/1 rewards, leave at 0.5.
+    reward_threshold: 0.5
+    # Generate evidence-backed mistake instructions with the same policy that
+    # produced the rollout. Invalid judge output is skipped only by SFT; the
+    # original negative rollout still follows ordinary GRPO.
+    use_mistake_specific: true
+    judge_max_prompt_tokens: 2560
+    judge_max_new_tokens: 256
+    judge_max_attempts: 3
+    # Cap on how many extra tokens the inoculation prefix may add
+    # beyond data.max_prompt_length before left-truncating.
+    max_extra_prompt_tokens: 64
+    # If true, over-length (ran-out-of-space, unterminated) incorrect rollouts
+    # are NOT inoculated — only cleanly-terminated "good quality" failures become
+    # SFT targets. Filters out truncated/degenerate responses (repetition loops).
+    skip_overlength: false
+    # Quality gate on the short end: failures with fewer valid response tokens
+    # than this never become SFT targets. Essential under seq-mean aggregation,
+    # where a 2-token junk response otherwise carries the same weight as a full
+    # attempt and can trigger a collapse loop. 0 disables.
+    min_response_tokens: 0
+
+data:
+  # `system` injection mode rebuilds the chat with the tokenizer's
+  # chat template, which needs the raw chat messages in the batch.
+  return_raw_chat: true
+
+trainer:
+  log_val_generations: 0
