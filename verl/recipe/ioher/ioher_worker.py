@@ -35,8 +35,15 @@ class IOHERActorRolloutRefWorker(ActorRolloutRefWorker):
                 from .dp_actor import install
 
                 sft_agg_mode = str(self.config.actor.get("ioh_sft_loss_agg_mode", "token-mean"))
-                install(self.actor.engine, ioh_sft_coef, sft_agg_mode)
+                sft_pack = bool(self.config.actor.get("ioh_sft_pack", False))
+                sft_pack_max_tokens = self.config.actor.get("ioh_sft_pack_max_tokens", None)
+                install(self.actor.engine, ioh_sft_coef, sft_agg_mode, sft_pack, sft_pack_max_tokens)
+                sft_layout = (
+                    f"packed inoculated SFT (max_tokens={sft_pack_max_tokens or 'micro x width'})"
+                    if sft_pack
+                    else "fixed-shape inoculated SFT"
+                )
                 print(
-                    "[ioher] actor engine patched: stock GRPO + fixed-shape inoculated SFT "
+                    f"[ioher] actor engine patched: stock GRPO + {sft_layout} "
                     f"(coef={ioh_sft_coef}, agg={sft_agg_mode}) in one optimizer step."
                 )

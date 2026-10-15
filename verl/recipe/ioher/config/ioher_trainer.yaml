@@ -18,6 +18,9 @@ actor_rollout_ref:
     # step, matching the Gaudi IOHER actor path.
     ioh_sft_coef: 0.01
     ioh_sft_loss_agg_mode: token-mean
+    # Same SFT objective computed only on supervised rows (no masked filler rows).
+    ioh_sft_pack: false
+    ioh_sft_pack_max_tokens: null
     optim:
       lr_warmup_steps: 15
   rollout:
@@ -67,6 +70,9 @@ algorithm:
     judge_max_prompt_tokens: 2560
     judge_max_new_tokens: 256
     judge_max_attempts: 3
+    # Judge each failed rollout as soon as it is scored, while slower rollouts
+    # are still generating. Same judge inputs, routing, limits, and retries.
+    judge_overlap: false
     # Cap on how many extra tokens the inoculation prefix may add
     # beyond data.max_prompt_length before left-truncating.
     max_extra_prompt_tokens: 64

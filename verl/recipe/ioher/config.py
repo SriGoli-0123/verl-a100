@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass
+from typing import Optional
 
 from verl.workers.config import FSDPActorConfig
 
@@ -23,3 +24,8 @@ class IOHERActorConfig(FSDPActorConfig):
 
     ioh_sft_coef: float = 0.01
     ioh_sft_loss_agg_mode: str = "token-mean"
+    # Run the SFT term only on supervised rows, packed by token budget, with
+    # per-token weights that reproduce the fixed-shape per-micro token-mean.
+    ioh_sft_pack: bool = False
+    # Token budget per packed SFT pass; None = micro_batch_size x padded width.
+    ioh_sft_pack_max_tokens: Optional[int] = None
