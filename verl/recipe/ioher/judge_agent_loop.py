@@ -178,7 +178,7 @@ class IOHERAgentLoopManager(AgentLoopManager):
                     self._tokenizer,
                     chat,
                     hard_limit=max(self.rollout_config.prompt_length, self._judge_prompt_tokens),
-                    few_shot_limit=self.rollout_config.prompt_length,
+                    few_shot_limit=self._judge_prompt_tokens,
                     template_kwargs=self._template_kwargs,
                 )
             except Exception as exc:
