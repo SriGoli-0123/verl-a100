@@ -198,8 +198,12 @@ def _ioher_train_batch(self, data, loss_function):
     if not active:
         return self._ioh_original_train_batch(data, loss_function)
 
-    if bool(tu.get_non_tensor_data(data=data, key="use_dynamic_bsz", default=False)):
-        raise ValueError("IOHER fixed-shape SFT requires actor.use_dynamic_bsz=False")
+    if bool(tu.get_non_tensor_data(data=data, key="use_dynamic_bsz", default=False)) and not getattr(
+        self, "_ioh_sft_pack", False
+    ):
+        # Packed SFT keeps its weights on sequential micro_batch_size_per_gpu groups,
+        # so only the fixed-shape path needs fixed GRPO micro-batches.
+        raise ValueError("IOHER fixed-shape SFT requires actor.use_dynamic_bsz=False (or actor.ioh_sft_pack=true)")
 
     self._ioh_optimizer_batch = data
     self._ioh_aux_metrics = {}
@@ -316,11 +320,9 @@ def _sft_weighted_loss(model_output, data, dp_group=None):
 @torch.no_grad()
 def _debug_compare_sft_losses(self, data, chunks, weights, num_chunks):
     """Debug-only: fixed-shape vs packed SFT loss on the same batch and parameters."""
-    micro_batches, _ = prepare_micro_batches(
-        data=data,
-        dp_group=self.get_data_parallel_group(),
-        same_micro_num_in_dp=True,
-    )
+    micro_batch_size = int(tu.get_non_tensor_data(data=data, key="micro_batch_size_per_gpu", default=0) or 0)
+    # Sequential fixed-size groups, as the fixed-shape path forms them without dynamic batching.
+    micro_batches = tu.chunk_tensordict(data, len(data) // micro_batch_size)
     previous_scale = self._ioh_sft_loss_scale
     self._ioh_sft_loss_scale = 1.0 / len(micro_batches)
     fixed = 0.0
@@ -336,18 +338,27 @@ def _debug_compare_sft_losses(self, data, chunks, weights, num_chunks):
             sft_batch = _build_dummy_sft_batch(self, data)
         loss, _ = self._ioh_original_forward_step(sft_batch, _sft_weighted_loss, True)
         packed += float(loss)
+    # Same objective, one row per pass: its gap to `packed` is pure bf16 shape noise.
+    packed_rows = 0.0
+    for row in [row for chunk in chunks for row in chunk]:
+        loss, _ = self._ioh_original_forward_step(
+            _build_packed_sft_batch(self, data, [row], weights), _sft_weighted_loss, True
+        )
+        packed_rows += float(loss)
     print(
-        f"IOHER_SFT_PACK_COMPARE fixed={fixed:.8f} packed={packed:.8f} "
-        f"abs_diff={abs(fixed - packed):.3e} fixed_passes={len(micro_batches)} packed_passes={num_chunks}",
+        f"IOHER_SFT_PACK_COMPARE fixed={fixed:.8f} packed={packed:.8f} per_row={packed_rows:.8f} "
+        f"fixed_vs_packed={abs(fixed - packed) / abs(fixed):.2e} "
+        f"per_row_vs_packed={abs(packed_rows - packed) / abs(packed):.2e} "
+        f"fixed_passes={len(micro_batches)} packed_passes={num_chunks}",
         flush=True,
     )
 
 
 def _ioher_packed_sft_backward(self, data):
     """Same SFT objective as the fixed-shape path, computed on supervised rows only."""
-    micro_batch_size = int(tu.get_non_tensor_data(data=data, key="micro_batch_size_per_gpu", default=0))
+    micro_batch_size = int(tu.get_non_tensor_data(data=data, key="micro_batch_size_per_gpu", default=0) or 0)
     if micro_batch_size <= 0:
-        micro_batch_size = int(data["micro_batch_size_per_gpu"])
+        raise ValueError("ioh_sft_pack needs actor.ppo_micro_batch_size_per_gpu as its reference SFT grouping")
     ioh_response_mask = data["ioh_response_mask"]
     weights = sft_reference_token_weights(ioh_response_mask, micro_batch_size)
 
